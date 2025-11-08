@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Random Star System & Planet Finder</title>
+<style>
+  :root{--bg:#0b1220;--card:#071028;--accent:#6ee7b7;--muted:#9aa6b2;--glass: rgba(255,255,255,0.03)}
+  html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,#031021,#06112b);color:#e6f0f2}
+  .wrap{padding:20px;max-width:1200px;margin:0 auto;display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start}
+  .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:10px;padding:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+  h1{font-size:18px;margin:0 0 12px 0}
+  label{font-size:13px;color:var(--muted);display:block;margin-top:10px}
+  input,select,button{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit}
+  button{cursor:pointer}
+  .controls{display:flex;gap:8px;margin-top:8px}
+  .controls > *{flex:1}
+  .result-header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+  #systemsList{height:calc(100vh - 160px);overflow:auto;padding:6px;border-radius:6px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));}
+  .system-card{padding:10px;border-radius:8px;margin-bottom:8px;background:linear-gradient(180deg, rgba(255,255,255,0.008), rgba(255,255,255,0.004));display:flex;gap:10px;align-items:center}
+  .mini-visual{width:180px;height:80px;border-radius:6px;background:radial-gradient(circle at 20% 50%, rgba(255,255,200,0.06), transparent 20%);position:relative;overflow:hidden;border:1px solid rgba(255,255,255,0.02)}
+  .star{position:absolute;left:8px;top:50%;transform:translateY(-50%);border-radius:50%}
+  .planet{position:absolute;border-radius:50%}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:6px;border-bottom:1px solid rgba(255,255,255,0.02);text-align:left}
+  .tag{display:inline-block;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,0.03);font-size:12px;margin-left:6px}
+  .filters{display:flex;gap:8px;margin:8px 0}
+  .small{padding:6px}
+  footer{font-size:12px;color:var(--muted);margin-top:10px;text-align:center}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <h1>Star & Planet Finder</h1>
+      <div>
+        <label>Number of systems to generate</label>
+        <input id="numSystems" type="number" value="20" min="1" max="200">
+        <label>Expected average planets per system (lambda for Poisson)</label>
+        <input id="avgPlanets" type="number" value="5" min="0" max="50" step="0.1">
+        <label>Chance for binary/multiple star system (%)</label>
+        <input id="multiStarChance" type="number" value="15" min="0" max="100">
+        <label>Chance of life on habitable planet (%)</label>
+        <input id="lifeChance" type="number" value="8" min="0" max="100">
+      </div>
+
+      <label>Star type probabilities (relative weights)</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <input id="wO" type="number" value="0.1" step="0.1" min="0">
+        <input id="wB" type="number" value="0.6" step="0.1" min="0">
+        <input id="wA" type="number" value="3" step="0.1" min="0">
+        <input id="wF" type="number" value="6" step="0.1" min="0">
+        <input id="wG" type="number" value="12" step="0.1" min="0">
+        <input id="wK" type="number" value="20" step="0.1" min="0">
+        <input id="wM" type="number" value="50" step="0.1" min="0">
+      </div>
+
+      <label style="margin-top:10px">Filters</label>
+      <div class="filters">
+        <select id="filterType">
+          <option value="all">All systems</option>
+          <option value="habitable">Systems with ≥1 potentially habitable planet</option>
+          <option value="life">Systems with planets flagged 'life likely'</option>
+          <option value="binary">Binary / multiple stars</option>
+        </select>
+        <button id="generate" class="small">Generate</button>
+        <button id="exportCSV" class="small">Export CSV</button>
+      </div>
+
+      <label>Quick tips</label>
+      <div style="font-size:13px;color:var(--muted)">This simulator uses heuristic probabilities and simple physics-like scalings to create plausible-looking systems for exploration and story/education use. It's not an accurate astrophysical simulator.</div>
+      <footer>Made for fun — tweak parameters and explore!</footer>
+    </div>
+
+    <div class="panel" style="display:flex;flex-direction:column">
+      <div class="result-header">
+        <div>
+          <strong>Generated Systems</strong>
+          <span class="tag" id="summaryTag">0 systems</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input id="search" placeholder="Search by name or star type..." style="min-width:220px">
+          <select id="sortBy">
+            <option value="name">Sort: Name</option>
+            <option value="numPlanets">Sort: #Planets</option>
+            <option value="bestHab">Sort: Best hab score</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="systemsList"></div>
+    </div>
+  </div>
+
+<script>
+/*
+  Star & Planet Finder
+  - Generates random systems using probabilistic rules.
+  - Each system has: name, stars (1..3), planets array.
+  - Each planet has: orbit (AU), radius (Earth radii), mass (Earth mass ~), type, temp estimate, habitability score, life flag.
+*/
+
+// ---------- Utilities ----------
+function rand(){ return Math.random() }
+function randint(a,b){ return Math.floor(Math.random()*(b-a+1))+a }
+function chooseWeighted(items, weights){
+  // items: array, weights: array of same length (numbers)
+  const total = weights.reduce((s,w)=>s+w,0)
+  let r = Math.random()*total
+  for(let i=0;i<items.length;i++){
+    r -= weights[i]
+    if(r<=0) return items[i]
+  }
+  return items[items.length-1]
+}
+function samplePoisson(lambda){
+  // Knuth algorithm
+  let L = Math.exp(-lambda), k = 0, p = 1
+  do {
+    k++
+    p *= Math.random()
+  } while (p > L)
+  return k-1
+}
+function format(num,dec=2){ return Number(num).toFixed(dec) }
+
+// ---------- Naming ----------
+const syl1 = ["Ke","Gl","TR","HD","LP","TYC","K2-","GJ","KOI"]
+const syl2 = ["-"," "]
+const syl3 = ["A","B","C","X","II","III","IV"]
+function genName(i){
+  // generate semi-realistic names like "K2-314 b" or "HD 123456"
+  const p = Math.random()
+  if(p<0.3) return `HD ${randIntRange(10000,999999)}`
+  if(p<0.6) return `${syl1[randint(0,syl1.length-1)]}${randIntRange(1,9999)}`
+  return `${syl1[randint(0,syl1.length-1)]}${randint(1,999)} ${syl3[randint(0,syl3.length-1)]}`
+}
+function randIntRange(a,b){ return Math.floor(Math.random()*(b-a+1))+a }
+
+// ---------- Star & planet distributions ----------
+const STAR_TYPES = [
+  {type:"O", color:"#9bb0ff", temp:35000, mass:40, radius:15},
+  {type:"B", color:"#aabfff", temp:20000, mass:10, radius:6},
+  {type:"A", color:"#cad7ff", temp:8500, mass:2.1, radius:1.7},
+  {type:"F", color:"#f8f7ff", temp:6500, mass:1.4, radius:1.3},
+  {type:"G", color:"#fff4ea", temp:5800, mass:1.0, radius:1.0},
+  {type:"K", color:"#ffd2a1", temp:4300, mass:0.8, radius:0.85},
+  {type:"M", color:"#ffcc6f", temp:3200, mass:0.3, radius:0.4}
+]
+
+// planet type by radius (Earth radii)
+function classifyPlanet(rRe){
+  if(rRe < 0.5) return "Sub-Earth"
+  if(rRe < 1.25) return "Terrestrial"
+  if(rRe < 2.5) return "Super-Earth"
+  if(rRe < 6) return "Mini-Neptune"
+  if(rRe < 15) return "Neptune-like"
+  return "Gas Giant"
+}
+
+// simple mass-radius scaling (very rough)
+function massFromRadius(rRe){
+  if(rRe < 1.5) return Math.pow(rRe,3.7) // rocky scaling
+  if(rRe < 6) return 2.7 * Math.pow(rRe,1.3)
+  return 0.3 * Math.pow(rRe,2.0) * 318 // gas giants relative to Jupiter mass approx
+}
+
+// ---------- Habitability model (heuristic) ----------
+function computeHabitable(star, orbitAU, radiusRe, massMe, insolation){
+  // insolation: relative to Earth (1 at 1 AU around Sun-like star)
+  // Simple factors: inside habitable insolation window, rocky-ish radius, moderate tidal/irradiation.
+  const isRocky = radiusRe <= 1.6
+  const insScore = Math.exp(-Math.pow(Math.log(insolation || 1),2) / (2*Math.pow(Math.log(1.6),2))) // peaked at 1
+  const sizeScore = isRocky ? 1.0 : 0.2
+  const tidalPenalty = orbitAU < 0.02 ? 0.1 : 1.0
+  const radiationPenalty = (star.type === 'O' || star.type === 'B') ? 0.3 : 1.0
+  // combine
+  const raw = 100 * insScore * sizeScore * tidalPenalty * radiationPenalty
+  // small randomization
+  return Math.max(0, Math.min(100, raw * (0.75 + Math.random()*0.5)))
+}
+
+// ---------- Generation ----------
+function generateSystem(index, options){
+  const name = genName(index)
+  // pick star type weighted by user weights
+  const weights = options.starWeights
+  const starType = chooseWeighted(STAR_TYPES, weights.map(w=>w))
+  // multiplicity (single, binary, triple)
+  const multi = Math.random()*100 < options.multipleStarChance ? (Math.random()<0.12?3:2) : 1
+  const stars = []
+  for(let i=0;i<multi;i++){
+    // small variation in mass/radius/temp
+    const mscale = 1 + (Math.random()-0.5)*0.15
+    stars.push({
+      id: i+1,
+      type: starType.type,
+      mass: Math.max(0.08, starType.mass * mscale),
+      radius: Math.max(0.1, starType.radius * mscale),
+      temp: Math.max(2000, starType.temp * (1 + (Math.random()-0.5)*0.1)),
+      color: starType.color
+    })
+  }
+
+  // number of planets via Poisson
+  const nPlanets = Math.max(0, samplePoisson(options.avgPlanets))
+  const planets = []
+
+  // create planets with orbital spacing via random walk (log spacing)
+  let a = 0.05 + Math.random()*0.05 // inner edge in AU
+  for(let p=0;p<nPlanets;p++){
+    // step = geometric spacing (1.2..2.0)
+    const step = 1.15 + Math.random()*1.4
+    a *= step
+    // radius distribution: mix of distributions
+    let rRe
+    const rPick = Math.random()
+    if(rPick < 0.5) rRe = Math.max(0.3, randNorm(1,0.25)) // terrestrial-ish
+    else if(rPick < 0.8) rRe = Math.max(1.2, randNorm(2.5,0.8)) // super-earth / mini-neptune
+    else rRe = Math.max(3.5, randNorm(6,2.5)) // large/giant
+    const massMe = massFromRadius(rRe)
+    // insolation: simplify using main star luminosity ~ mass^3.5 (rough)
+    const mainMass = stars[0].mass
+    const lum = Math.pow(mainMass, 3.5) // in solar units approximated
+    const insolation = lum / (a*a)
+    const habitability = computeHabitable(stars[0], a, rRe, massMe, insolation)
+    const hasLife = habitability > 40 && Math.random()*100 < options.lifeChance
+    planets.push({
+      name: String.fromCharCode(98 + p), // b, c, d...
+      orbitAU: Number(a.toFixed(3)),
+      radiusRe: Number(rRe.toFixed(3)),
+      massMe: Number(massMe.toFixed(3)),
+      insolation: Number(insolation.toFixed(3)),
+      type: classifyPlanet(rRe),
+      habScore: Number(habitability.toFixed(1)),
+      life: hasLife
+    })
+  }
+
+  // summary metrics
+  const bestHab = planets.length ? Math.max(...planets.map(p=>p.habScore)) : 0
+  const habitableCount = planets.filter(p=>p.habScore >= 30 && p.type === 'Terrestrial').length
+  return {
+    name, stars, planets, bestHab, habitableCount, isMultiple: multi>1
+  }
+}
+
+// normal distribution sample
+function randNorm(mu=0, sigma=1){
+  // Box-Muller
+  let u=0,v=0
+  while(u===0) u=Math.random()
+  while(v===0) v=Math.random()
+  const z = Math.sqrt(-2.0*Math.log(u)) * Math.cos(2*Math.PI*v)
+  return mu + sigma*z
+}
+
+// ---------- UI wiring ----------
+const numSystemsEl = document.getElementById('numSystems')
+const avgPlanetsEl = document.getElementById('avgPlanets')
+const multiChanceEl = document.getElementById('multiStarChance')
+const lifeChanceEl = document.getElementById('lifeChance')
+const generateBtn = document.getElementById('generate')
+const systemsListEl = document.getElementById('systemsList')
+const summaryTag = document.getElementById('summaryTag')
+const filterTypeEl = document.getElementById('filterType')
+const searchEl = document.getElementById('search')
+const sortByEl = document.getElementById('sortBy')
+const exportBtn = document.getElementById('exportCSV')
+
+// star weight inputs
+const weightInputs = ['wO','wB','wA','wF','wG','wK','wM'].map(id => document.getElementById(id))
+
+let lastResults = []
+
+function readOptions(){
+  const starWeights = weightInputs.map(inp => Number(inp.value) || 0.0)
+  return {
+    numSystems: Math.max(1, Math.min(500, Number(numSystemsEl.value) || 1)),
+    avgPlanets: Math.max(0, Number(avgPlanetsEl.value) || 3),
+    multipleStarChance: Math.max(0, Math.min(100, Number(multiChanceEl.value) || 0)),
+    lifeChance: Math.max(0, Math.min(100, Number(lifeChanceEl.value) || 0)),
+    starWeights
+  }
+}
+
+function renderSystemCard(sys, idx){
+  const div = document.createElement('div')
+  div.className = 'system-card'
+  const left = document.createElement('div')
+  left.style.flex = '0 0 200px'
+  const visual = document.createElement('div')
+  visual.className = 'mini-visual'
+  // draw inside the element using absolute positioned elements
+  // add star
+  const starEl = document.createElement('div')
+  const mainStar = sys.stars[0]
+  const starSize = Math.max(10, Math.min(36, mainStar.radius * 3 + Math.random()*6))
+  starEl.className = 'star'
+  starEl.style.width = starEl.style.height = starSize + 'px'
+  starEl.style.background = mainStar.color
+  starEl.style.boxShadow = `0 0 ${Math.max(8,starSize)}px ${mainStar.color}`
+  visual.appendChild(starEl)
+  // add planets as small dots positioned by orbit (log scale to fit)
+  const W = 180, H = 80
+  const maxAU = Math.max(...sys.planets.map(p=>p.orbitAU), 0.1)
+  sys.planets.forEach((p,i)=>{
+    const planetEl = document.createElement('div')
+    planetEl.className = 'planet'
+    const px = 18 + (Math.log(p.orbitAU+0.001)/Math.log(maxAU+0.001)) * (W-36)
+    const py = H*0.5 + Math.sin(i*2.3 + idx) * (H*0.18)
+    const pr = Math.max(3, Math.min(10, Math.log(p.radiusRe+1)*6))
+    planetEl.style.width = planetEl.style.height = pr + 'px'
+    planetEl.style.left = Math.min(W-pr-2, Math.max(2, px)) + 'px'
+    planetEl.style.top = Math.min(H-pr-2, Math.max(2, py)) + 'px'
+    planetEl.style.background = p.type === 'Terrestrial' ? '#9ad7ff' : (p.life ? '#7ee7a6' : '#f6d186')
+    planetEl.title = `${p.name}: ${p.type}, orbit ${p.orbitAU} AU`
+    visual.appendChild(planetEl)
+  })
+  left.appendChild(visual)
+
+  const right = document.createElement('div')
+  right.style.flex = '1'
+  const title = document.createElement('div')
+  title.innerHTML = `<strong style="font-size:15px">${sys.name}</strong> <span class="tag">${sys.stars[0].type}-type</span>`
+  if(sys.isMultiple) title.innerHTML += `<span class="tag">Multiple</span>`
+  const meta = document.createElement('div')
+  meta.style.fontSize='13px'; meta.style.color='var(--muted)'; meta.style.marginTop='6px'
+  meta.textContent = `${sys.planets.length} planets • Best hab score: ${sys.bestHab}`
+  right.appendChild(title)
+  right.appendChild(meta)
+
+  // table of planets
+  const table = document.createElement('table')
+  const thead = document.createElement('thead')
+  thead.innerHTML = `<tr><th>Planet</th><th>Type</th><th>Orbit (AU)</th><th>Radius (R⊕)</th><th>Mass (M⊕)</th><th>Insol</th><th>Hab%</th><th>Life</th></tr>`
+  table.appendChild(thead)
+  const tbody = document.createElement('tbody')
+  sys.planets.forEach(p=>{
+    const tr = document.createElement('tr')
+    tr.innerHTML = `<td>${p.name}</td><td>${p.type}</td><td>${p.orbitAU}</td><td>${p.radiusRe}</td><td>${p.massMe}</td><td>${p.insolation}</td><td>${p.habScore}</td><td>${p.life? 'Yes' : ''}</td>`
+    tbody.appendChild(tr)
+  })
+  table.appendChild(tbody)
+  right.appendChild(table)
+
+  div.appendChild(left)
+  div.appendChild(right)
+  return div
+}
+
+function filterAndRender(results){
+  systemsListEl.innerHTML = ''
+  let filtered = results.slice()
+  const filter = filterTypeEl.value
+  if(filter === 'habitable'){
+    filtered = filtered.filter(s => s.planets.some(p => p.habScore >= 30 && p.type === 'Terrestrial'))
+  } else if(filter === 'life'){
+    filtered = filtered.filter(s => s.planets.some(p => p.life))
+  } else if(filter === 'binary'){
+    filtered = filtered.filter(s => s.isMultiple)
+  }
+  // search
+  const q = searchEl.value.trim().toLowerCase()
+  if(q){
+    filtered = filtered.filter(s => s.name.toLowerCase().includes(q) || s.stars[0].type.toLowerCase().includes(q))
+  }
+  // sort
+  const sort = sortByEl.value
+  if(sort === 'numPlanets') filtered.sort((a,b)=>b.planets.length - a.planets.length)
+  else if(sort === 'bestHab') filtered.sort((a,b)=>b.bestHab - a.bestHab)
+  else filtered.sort((a,b)=>a.name.localeCompare(b.name))
+  // render
+  filtered.forEach((s,i)=> systemsListEl.appendChild(renderSystemCard(s,i)))
+  summaryTag.textContent = `${filtered.length} systems (displaying ${filtered.length} / ${results.length})`
+}
+
+generateBtn.addEventListener('click', ()=>{
+  const opts = readOptions()
+  const results = []
+  for(let i=0;i<opts.numSystems;i++){
+    const sys = generateSystem(i, {
+      avgPlanets: opts.avgPlanets,
+      multipleStarChance: opts.multipleStarChance,
+      lifeChance: opts.lifeChance,
+      starWeights: opts.starWeights
+    })
+    results.push(sys)
+  }
+  lastResults = results
+  filterAndRender(results)
+})
+
+// dynamic filtering / searching
+filterTypeEl.addEventListener('change', ()=> filterAndRender(lastResults))
+searchEl.addEventListener('input', ()=> filterAndRender(lastResults))
+sortByEl.addEventListener('change', ()=> filterAndRender(lastResults))
+
+// export CSV
+function exportToCSV(systems){
+  const rows = []
+  rows.push(['system','starType','isMultiple','planet','type','orbitAU','radiusRe','massMe','insolation','habScore','life'])
+  systems.forEach(s=>{
+    s.planets.forEach(p=>{
+      rows.push([
+        s.name, s.stars[0].type, s.isMultiple ? 'yes' : 'no',
+        p.name, p.type, p.orbitAU, p.radiusRe, p.massMe, p.insolation, p.habScore, p.life ? 'yes' : 'no'
+      ])
+    })
+    if(s.planets.length===0) rows.push([s.name, s.stars[0].type, s.isMultiple ? 'yes':'no','','','','','','','',''])
+  })
+  const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'})
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'starfinder_results.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+exportBtn.addEventListener('click', ()=> exportToCSV(lastResults))
+
+// autogenerate initial set
+generateBtn.click()
+
+</script>
+</body>
+</html><!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Star & Planet Finder (with Intelligent Life)</title>
+<style>
+  :root{--bg:#0b1220;--card:#071028;--accent:#6ee7b7;--muted:#9aa6b2;--glass: rgba(255,255,255,0.03)}
+  html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,#031021,#06112b);color:#e6f0f2}
+  .wrap{padding:20px;max-width:1200px;margin:0 auto;display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start}
+  .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:10px;padding:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+  h1{font-size:18px;margin:0 0 12px 0}
+  label{font-size:13px;color:var(--muted);display:block;margin-top:10px}
+  input,select,button{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit}
+  button{cursor:pointer}
+  .controls{display:flex;gap:8px;margin-top:8px}
+  .controls > *{flex:1}
+  .result-header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+  #systemsList{height:calc(100vh - 160px);overflow:auto;padding:6px;border-radius:6px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));}
+  .system-card{padding:10px;border-radius:8px;margin-bottom:8px;background:linear-gradient(180deg, rgba(255,255,255,0.008), rgba(255,255,255,0.004));display:flex;gap:10px;align-items:center}
+  .mini-visual{width:180px;height:80px;border-radius:6px;background:radial-gradient(circle at 20% 50%, rgba(255,255,200,0.06), transparent 20%);position:relative;overflow:hidden;border:1px solid rgba(255,255,255,0.02)}
+  .star{position:absolute;left:8px;top:50%;transform:translateY(-50%);border-radius:50%}
+  .planet{position:absolute;border-radius:50%}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:6px;border-bottom:1px solid rgba(255,255,255,0.02);text-align:left}
+  .tag{display:inline-block;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,0.03);font-size:12px;margin-left:6px}
+  .filters{display:flex;gap:8px;margin:8px 0}
+  .small{padding:6px}
+  footer{font-size:12px;color:var(--muted);margin-top:10px;text-align:center}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <h1>Star & Planet Finder 🪐</h1>
+      <div>
+        <label>Number of systems to generate</label>
+        <input id="numSystems" type="number" value="20" min="1" max="200">
+        <label>Expected average planets per system</label>
+        <input id="avgPlanets" type="number" value="5" min="0" max="50" step="0.1">
+        <label>Chance for binary/multiple star system (%)</label>
+        <input id="multiStarChance" type="number" value="15" min="0" max="100">
+        <label>Chance of basic life on habitable planet (%)</label>
+        <input id="lifeChance" type="number" value="8" min="0" max="100">
+        <label>Chance of intelligent life in system (%)</label>
+        <input id="intelChance" type="number" value="1" min="0" max="100">
+      </div>
+
+      <label>Star type probabilities (relative weights)</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <input id="wO" type="number" value="0.1" step="0.1" min="0">
+        <input id="wB" type="number" value="0.6" step="0.1" min="0">
+        <input id="wA" type="number" value="3" step="0.1" min="0">
+        <input id="wF" type="number" value="6" step="0.1" min="0">
+        <input id="wG" type="number" value="12" step="0.1" min="0">
+        <input id="wK" type="number" value="20" step="0.1" min="0">
+        <input id="wM" type="number" value="50" step="0.1" min="0">
+      </div>
+
+      <label style="margin-top:10px">Filters</label>
+      <div class="filters">
+        <select id="filterType">
+          <option value="all">All systems</option>
+          <option value="habitable">≥1 habitable planet</option>
+          <option value="life">Basic life detected</option>
+          <option value="intelligent">Intelligent life detected</option>
+          <option value="binary">Binary / multiple stars</option>
+        </select>
+        <button id="generate" class="small">Generate</button>
+        <button id="exportCSV" class="small">Export CSV</button>
+      </div>
+      <footer>Now includes probabilistic intelligent life estimates 🧠</footer>
+    </div>
+
+    <div class="panel" style="display:flex;flex-direction:column">
+      <div class="result-header">
+        <div>
+          <strong>Generated Systems</strong>
+          <span class="tag" id="summaryTag">0 systems</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input id="search" placeholder="Search by name or star type..." style="min-width:220px">
+          <select id="sortBy">
+            <option value="name">Sort: Name</option>
+            <option value="numPlanets">Sort: #Planets</option>
+            <option value="bestHab">Sort: Best hab score</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="systemsList"></div>
+    </div>
+  </div>
+
+<script>
+function rand(){return Math.random()}
+function randint(a,b){return Math.floor(rand()*(b-a+1))+a}
+function chooseWeighted(items,weights){const tot=weights.reduce((s,w)=>s+w,0);let r=rand()*tot;for(let i=0;i<items.length;i++){r-=weights[i];if(r<=0)return items[i]}return items[items.length-1]}
+function samplePoisson(l){let L=Math.exp(-l),k=0,p=1;do{k++;p*=rand()}while(p>L);return k-1}
+function randNorm(mu=0,sigma=1){let u=0,v=0;while(u===0)u=rand();while(v===0)v=rand();return mu+sigma*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)}
+
+const STAR_TYPES=[
+ {type:"O",color:"#9bb0ff",temp:35000,mass:40,radius:15},
+ {type:"B",color:"#aabfff",temp:20000,mass:10,radius:6},
+ {type:"A",color:"#cad7ff",temp:8500,mass:2.1,radius:1.7},
+ {type:"F",color:"#f8f7ff",temp:6500,mass:1.4,radius:1.3},
+ {type:"G",color:"#fff4ea",temp:5800,mass:1.0,radius:1.0},
+ {type:"K",color:"#ffd2a1",temp:4300,mass:0.8,radius:0.85},
+ {type:"M",color:"#ffcc6f",temp:3200,mass:0.3,radius:0.4}
+]
+function classifyPlanet(r){if(r<0.5)return"Sub-Earth";if(r<1.25)return"Terrestrial";if(r<2.5)return"Super-Earth";if(r<6)return"Mini-Neptune";if(r<15)return"Neptune-like";return"Gas Giant"}
+function massFromRadius(r){if(r<1.5)return Math.pow(r,3.7);if(r<6)return 2.7*Math.pow(r,1.3);return 0.3*Math.pow(r,2.0)*318}
+function computeHabitable(star,a,r,m,insol){const rocky=r<=1.6;const insScore=Math.exp(-Math.pow(Math.log(insol||1),2)/(2*Math.pow(Math.log(1.6),2)));const sizeScore=rocky?1:0.2;const tidal=a<0.02?0.1:1;const rad=(star.type=="O"||star.type=="B")?0.3:1;const raw=100*insScore*sizeScore*tidal*rad;return Math.max(0,Math.min(100,raw*(0.75+rand()*0.5)))}
+
+// --- System generation with intelligent life probability ---
+function generateSystem(index,opt){
+  const starType=chooseWeighted(STAR_TYPES,opt.starWeights)
+  const multi=rand()*100<opt.multipleStarChance?(rand()<0.12?3:2):1
+  const stars=[]
+  for(let i=0;i<multi;i++){
+    const s=1+(rand()-0.5)*0.15
+    stars.push({...starType,mass:Math.max(0.08,starType.mass*s),radius:Math.max(0.1,starType.radius*s)})
+  }
+  const nPlanets=Math.max(0,samplePoisson(opt.avgPlanets))
+  const planets=[]
+  let a=0.05+rand()*0.05
+  for(let p=0;p<nPlanets;p++){
+    a*=(1.15+rand()*1.4)
+    const rPick=rand()
+    let rRe
+    if(rPick<0.5)rRe=Math.max(0.3,randNorm(1,0.25))
+    else if(rPick<0.8)rRe=Math.max(1.2,randNorm(2.5,0.8))
+    else rRe=Math.max(3.5,randNorm(6,2.5))
+    const mass=massFromRadius(rRe)
+    const lum=Math.pow(stars[0].mass,3.5)
+    const ins=lum/(a*a)
+    const hab=computeHabitable(stars[0],a,rRe,mass,ins)
+    const hasLife=hab>40 && rand()*100<opt.lifeChance
+    planets.push({name:String.fromCharCode(98+p),orbitAU:+a.toFixed(3),radiusRe:+rRe.toFixed(2),massMe:+mass.toFixed(1),insolation:+ins.toFixed(2),type:classifyPlanet(rRe),habScore:+hab.toFixed(1),life:hasLife})
+  }
+  const bestHab=planets.length?Math.max(...planets.map(p=>p.habScore)):0
+  const habCount=planets.filter(p=>p.habScore>=30&&p.type==="Terrestrial").length
+
+  // --- Intelligent life probability model ---
+  let intelligent=false
+  if(habCount>0){
+    // Base chance = user chance * (bestHab / 100) * scaling by habitable worlds
+    const base=opt.intelChance * (bestHab/100) * (1+habCount*0.2)
+    if(rand()*100<base) intelligent=true
+  }
+
+  return {name:`SYS-${index+1}`,stars,planets,bestHab,habCount,isMultiple:multi>1,intelligent}
+}
+
+// --- UI wiring ---
+const getEl=id=>document.getElementById(id)
+const numSystemsEl=getEl('numSystems')
+const avgPlanetsEl=getEl('avgPlanets')
+const multiChanceEl=getEl('multiStarChance')
+const lifeChanceEl=getEl('lifeChance')
+const intelChanceEl=getEl('intelChance')
+const systemsListEl=getEl('systemsList')
+const summaryTag=getEl('summaryTag')
+const filterTypeEl=getEl('filterType')
+const searchEl=getEl('search')
+const sortByEl=getEl('sortBy')
+const exportBtn=getEl('exportCSV')
+const generateBtn=getEl('generate')
+const weightInputs=['wO','wB','wA','wF','wG','wK','wM'].map(getEl)
+let lastResults=[]
+
+function readOptions(){
+  return {
+    numSystems:+numSystemsEl.value||10,
+    avgPlanets:+avgPlanetsEl.value||5,
+    multipleStarChance:+multiChanceEl.value||10,
+    lifeChance:+lifeChanceEl.value||5,
+    intelChance:+intelChanceEl.value||1,
+    starWeights:weightInputs.map(i=>+i.value||0)
+  }
+}
+
+function renderSystem(sys){
+  const div=document.createElement('div')
+  div.className='system-card'
+  const visual=document.createElement('div')
+  visual.className='mini-visual'
+  const star=document.createElement('div')
+  star.className='star'
+  const size=Math.max(10,Math.min(36,sys.stars[0].radius*3))
+  star.style.width=star.style.height=size+'px'
+  star.style.background=sys.stars[0].color
+  star.style.boxShadow=`0 0 ${size}px ${sys.stars[0].color}`
+  visual.appendChild(star)
+  sys.planets.forEach((p,i)=>{
+    const pl=document.createElement('div')
+    pl.className='planet'
+    const maxAU=Math.max(...sys.planets.map(pp=>pp.orbitAU),0.1)
+    const px=18+(Math.log(p.orbitAU+0.001)/Math.log(maxAU+0.001))*150
+    const pr=Math.max(3,Math.min(10,Math.log(p.radiusRe+1)*6))
+    pl.style.width=pl.style.height=pr+'px'
+    pl.style.left=px+'px'
+    pl.style.top=40+(Math.sin(i*2)*15)+'px'
+    pl.style.background=p.life?'#7ee7a6':(p.type==='Terrestrial'?'#9ad7ff':'#f6d186')
+    visual.appendChild(pl)
+  })
+  const info=document.createElement('div')
+  info.style.flex='1'
+  info.innerHTML=`<strong>${sys.name}</strong> <span class='tag'>${sys.stars[0].type}</span>${sys.isMultiple?'<span class="tag">Multiple</span>':''}${sys.intelligent?'<span class="tag" style="background:#34d399;">🧠 Intelligent</span>':''}
+  <div style="font-size:13px;color:var(--muted)">${sys.planets.length} planets • Best hab ${sys.bestHab.toFixed(1)} • Habitable ${sys.habCount}</div>`
+  div.appendChild(visual)
+  div.appendChild(info)
+  return div
+}
+
+function filterAndRender(){
+  const filter=filterTypeEl.value, q=searchEl.value.toLowerCase()
+  let res=lastResults.slice()
+  if(filter==='habitable') res=res.filter(s=>s.habCount>0)
+  else if(filter==='life') res=res.filter(s=>s.planets.some(p=>p.life))
+  else if(filter==='intelligent') res=res.filter(s=>s.intelligent)
+  else if(filter==='binary') res=res.filter(s=>s.isMultiple)
+  if(q) res=res.filter(s=>s.name.toLowerCase().includes(q)||s.stars[0].type.toLowerCase().includes(q))
+  if(sortByEl.value==='numPlanets')res.sort((a,b)=>b.planets.length-a.planets.length)
+  else if(sortByEl.value==='bestHab')res.sort((a,b)=>b.bestHab-a.bestHab)
+  else res.sort((a,b)=>a.name.localeCompare(b.name))
+  systemsListEl.innerHTML=''
+  res.forEach(s=>systemsListEl.appendChild(renderSystem(s)))
+  summaryTag.textContent=`${res.length}/${lastResults.length} systems`
+}
+
+generateBtn.onclick=()=>{
+  const opt=readOptions();const out=[]
+  for(let i=0;i<opt.numSystems;i++)out.push(generateSystem(i,opt))
+  lastResults=out;filterAndRender()
+}
+filterTypeEl.onchange=searchEl.oninput=sortByEl.onchange=()=>filterAndRender()
+
+// Export CSV
+exportBtn.onclick=()=>{
+  const rows=[['system','starType','isMultiple','numPlanets','bestHab','habitableCount','intelligent','planet','type','orbit','radius','mass','habScore','life']]
+  lastResults.forEach
